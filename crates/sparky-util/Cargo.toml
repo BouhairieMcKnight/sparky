@@ -1,0 +1,10 @@
+[package]
+name = "sparky-util"
+version = "0.1.0"
+edition = "2024"
+include = ["/src"]
+
+[dev-dependencies]
+sparky-macros = { path = "../sparky-macros"}
+
+[dependencies]
