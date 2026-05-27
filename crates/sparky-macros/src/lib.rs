@@ -1,7 +1,6 @@
 // <Query> ::= <select-statement> | <create-statement> | <drop-statement> | <alter-statement> | <insert-statement>
 // <select-statement> ::= SELECT [column-identifier]{, <column-identifier>} [(, <aggregate-function> | <aggregate)] FROM (<table-identifier>|<statement>) []
 
-use quote::ToTokens;
 use syn::spanned::Spanned;
 
 mod kw {
@@ -42,7 +41,11 @@ fn parse_till<T: syn::parse::Parse>(input: syn::parse::ParseStream) -> syn::Resu
     let mut items: Vec<T> = Vec::new();
 
     if input.is_empty() {
-        return Err(syn::Error::new(input.span(), "unexpected end of input"));
+        return Err(syn::Error::new(input.cursor().span(), "unexpected end of input"));
+    }
+    
+    if let Err(e) = peek_keyword(&input) {
+        return Err(e);
     }
 
     while !input.is_empty() {
@@ -90,7 +93,7 @@ impl syn::parse::Parse for CTE {
 }
 impl quote::ToTokens for CTE {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-
+        
     }
 }
 impl CTE {
@@ -146,6 +149,23 @@ impl syn::parse::Parse for Aggregate {
     }
 }
 
+struct ColumnTable {
+    column: syn::Ident,
+    dot_token: syn::token::Dot,
+    table: syn::Ident,
+    alias: Option<Alias>,
+}
+impl syn::parse::Parse for ColumnTable {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            column: input.parse()?,
+            dot_token: input.parse()?,
+            table: input.parse()?,
+            alias: parse_optional(&input, syn::Token![as])?,
+        })
+    }
+}
+
 struct Column {
     name: syn::Ident,
     alias: Option<Alias>,
@@ -154,13 +174,14 @@ impl syn::parse::Parse for Column {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         Ok(Self {
             name: input.parse()?,
-            alias: input.parse().ok()
+            alias: parse_optional(&input, syn::Token![as])?,
         })
     }
 }
 
 enum Selections {
     Aggregate(Aggregate),
+    ColumnTable(ColumnTable),
     Column(Column),
 }
 impl syn::parse::Parse for Selections {
@@ -172,6 +193,9 @@ impl syn::parse::Parse for Selections {
             Ok(Selections::Aggregate(input.parse()?))
         }
         else {
+            if input.peek2(syn::token::Dot) {
+                return Ok(Selections::ColumnTable(input.parse()?))
+            }
             Ok(Selections::Column(input.parse()?))
         }
     }
@@ -233,9 +257,15 @@ struct Filter {
 }
 impl syn::parse::Parse for Filter {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let where_token = input.parse::<syn::Token![where]>()?;
+        let conditions = match input.parse::<List<Condition>>() {
+            Ok(conditions) => conditions,
+            Err(e) => return Err(syn::Error::new(where_token.span(), "expected conditions")),
+        };
+
         Ok(Self {
-            where_token: input.parse()?,
-            conditions: input.parse::<List<Condition>>()?,
+            where_token,
+            conditions,
         })
     }
 }
@@ -315,12 +345,27 @@ where T: syn::parse::Parse {
 struct FromItem {
     from_token: kw::from,
     source: syn::Ident,
+    alias: Option<Alias>,
 }
 impl syn::parse::Parse for FromItem {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let from_token = input.parse::<kw::from>()?;
+        let source: syn::Ident = match input.parse::<syn::Ident>() {
+            Ok(source) => {
+                if !input.peek(syn::token::Paren) {
+                    source
+                }
+                else {
+                    return Err(syn::Error::new(from_token.span(), "expected ident"))
+                }
+            },
+            Err(e) => return Err(syn::Error::new(from_token.span(), "expected source following `from`")),
+        };
+
         Ok(Self {
-            from_token: input.parse()?,
-            source: input.parse()?,
+            from_token,
+            source,
+            alias: input.parse().ok()
         })
     }
 }
@@ -401,7 +446,7 @@ impl syn::parse::Parse for Create {
 
 impl quote::ToTokens for Create {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-
+        todo!()
     }
 }
 enum Statements {
